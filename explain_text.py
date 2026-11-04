@@ -1,5 +1,6 @@
 import os
 from groq import Groq
+from prompts import STRUCTURE_INSTRUCTION
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
@@ -49,7 +50,7 @@ Here are the student's notes (part {i} of {len(chunks)}):
 Explain this content in {language}, as if you were speaking directly to the student:
 - Use simple, conversational language (not formal/written style)
 - Break down any technical terms briefly
-- Be CONCISE — aim for a short, focused explanation, not exhaustive detail
+- Be CONCISE — {STRUCTURE_INSTRUCTION}
 - Do not just repeat the notes word-for-word — actually explain the concepts
 - Use whichever words a real student would naturally say out loud in 
   {language} — some words are commonly said in English even in Hindi/
@@ -71,7 +72,7 @@ Give only the explanation text, nothing else (no preamble like "Sure, here's the
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=800
+            max_tokens=1000
         )
 
         all_explanations.append(response.choices[0].message.content)

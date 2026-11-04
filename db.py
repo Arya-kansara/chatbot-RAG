@@ -60,6 +60,20 @@ def save_document(filename):
     return result
 
 
+
+def upload_audio(audio_bytes, filename):
+    result = supabase.storage.from_("audio").upload(
+        path=filename,
+        file=audio_bytes,
+        file_options={
+            "content-type": "audio/mpeg",
+            "upsert": "false"
+        }
+    )
+
+    return supabase.storage.from_("audio").get_public_url(filename)
+
+
 if __name__ == "__main__":
     # Quick test
     print("Testing save...")

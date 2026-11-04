@@ -1,34 +1,34 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import asyncio
-from flask import Flask, render_template, request, jsonify , session
-from werkzeug.utils import secure_filename
 import uuid
+from flask import Flask, render_template, request, jsonify, session
+from werkzeug.utils import secure_filename
+
 from vector_search import store_document_chunks
 from extract_pdf import extract_text_from_pdf
 from explain_text import explain_text
 from answer_question import answer_question
-from text_to_speech import text_to_speech
+from text_to_speech import text_to_speech_bytes
+from db import upload_audio
 
 app = Flask(__name__)
-app.secret_key = 'dev-secret-key' # Needed for session management
+app.secret_key = 'dev-secret-key'
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['AUDIO_FOLDER'] = 'static/audio'
-
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['AUDIO_FOLDER'], exist_ok=True)
 
 
 @app.route('/')
 def home():
-    session.pop('pdf_path', None)  # Clear any previous PDF path from session
-    session.pop('pdf_name', None)  # Clear any previous PDF name from session
+    session.pop('pdf_path', None)
+    session.pop('pdf_name', None)
     return render_template('index.html')
-
 
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    
     file = request.files.get('pdf_file')
     if not file or file.filename == '':
         return jsonify({'error': 'No file selected.'}), 400
@@ -61,6 +61,15 @@ def process():
         language, gender = lang_voice.split('-')
         explain_full = data.get('explain_full', False)
 
+        # Chat memory: the page sends the last messages of the open chat
+        raw_history = data.get('history') or []
+        history = [
+            {"role": m["role"], "content": str(m["content"])[:1200]}
+            for m in raw_history[-8:]
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")
+        ]
+        print("HISTORY ITEMS:", len(history), "| keys:", list(data.keys()))
+
         pdf_path = session.get('pdf_path')
 
         if explain_full:
@@ -74,24 +83,45 @@ def process():
                 return jsonify({'error': 'Please type your question.'}), 400
             raw_text = extract_text_from_pdf(pdf_path)
             pdf_name = session.get('pdf_name')
-            result_text = answer_question(user_question, context_text=raw_text, document_name=pdf_name, language=language)
+            result_text = answer_question(
+                user_question,
+                context_text=raw_text,
+                document_name=pdf_name,
+                language=language,
+                history=history
+            )
 
         else:
             if not user_question:
                 return jsonify({'error': 'Please type your question.'}), 400
-            result_text = answer_question(user_question, language=language)
+            result_text = answer_question(
+                user_question,
+                language=language,
+                history=history
+            )
 
-        audio_filename = f"{uuid.uuid4().hex}.mp3"
-        audio_path = os.path.join(app.config['AUDIO_FOLDER'], audio_filename)
-        asyncio.run(text_to_speech(result_text, output_file=audio_path, language=language, gender=gender))
+        # Audio: a voice failure must not lose the text answer
+        audio_url = None
+        audio_error = None
+        try:
+            audio_filename = f"{uuid.uuid4().hex}.mp3"
+            audio_bytes = asyncio.run(
+                text_to_speech_bytes(result_text, language=language, gender=gender)
+            )
+            audio_url = upload_audio(audio_bytes, audio_filename)
+        except Exception as e:
+            audio_error = str(e)
+            print("Audio failed:", e)
 
         return jsonify({
             'text': result_text,
-            'audio_url': f'/static/audio/{audio_filename}'
+            'audio_url': audio_url,
+            'audio_error': audio_error
         })
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
