@@ -1,4 +1,3 @@
-@"
 venv/
 __pycache__/
 *.pyc
@@ -7,4 +6,3 @@ uploads/*
 static/audio/*
 *.mp3
 test_*.py
-"@ | Out-File -Encoding ascii .gitignore
