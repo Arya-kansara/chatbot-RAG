@@ -1351,7 +1351,13 @@
     $('#new').onclick = () => { newChat(); clearFile() };
     const st = $('.start'); if (innerWidth <= 980) st.classList.add('closed'); $('#stT').onclick = () => { if (innerWidth <= 980) st.classList.toggle('closed') };
     if (ld('ng_fold', false) && innerWidth > 980) document.body.classList.add('fold');
-    function place() { const a = $('#ask'), p = $('#prefs'); if (innerWidth <= 980) { $('#dask').appendChild(a); $('#dpf').appendChild(p) } else { $('#askSlot').appendChild(a); $('#prefsSlot').appendChild(p) } }
+    function place() {
+      const sm = innerWidth <= 980, a = $('#ask'), p = $('#prefs'),
+        ta = sm ? $('#dask') : $('#askSlot'),
+        tp = sm ? $('#dpf') : $('#prefsSlot');
+      if (a.parentNode !== ta) ta.appendChild(a);
+      if (p.parentNode !== tp) tp.appendChild(p);
+    }
     addEventListener('resize', place); place();
     newChat();
   </script>
