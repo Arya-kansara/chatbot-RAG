@@ -1,155 +1,136 @@
-# Notegoo — Multilingual Voice-Based Study Assistant
+# Notegoo - Multilingual AI Study Assistant
 
-Notegoo is an AI-powered study companion that turns PDF notes into natural, spoken explanations — in English, Hindi, or Gujarati. It also answers direct questions, with or without a document, in a chat-style interface, with persistent memory and document-grounded answers via Retrieval-Augmented Generation (RAG).
+Notegoo turns study notes into clear, structured answers you can read and listen to, in English, Hindi or Gujarati. Upload a PDF and ask about it, or ask any question. Answers about a PDF come from a RAG pipeline that searches only the document you attached.
 
-## Problem
+## Features
 
-Students often have study material as dense PDFs (notes, cheat sheets, question banks), but reading long text is slow, and many learners — especially in regional-language-speaking areas — understand and retain concepts better when explained conversationally, in their own language, spoken aloud. Existing tools either read PDFs verbatim (not helpful) or work only in English.
+- **Ask with or without a PDF.** With a PDF, the answer is built from the most relevant passages of that file.
+- **Structured answers.** Each answer starts with a one-line summary, then headings, key points, numbered steps, tables, code blocks, callouts and mind maps where they fit. Quick questions get short answers, and "explain" questions get detailed notes.
+- **Three languages, six voices.** Choose the response language (English, Hindi, Gujarati) and a male or female voice. Answers are read aloud and the audio is stored in Supabase Storage.
+- **Chat memory.** Follow-ups such as "explain that more simply" work. The page keeps each chat in the browser and sends the last 8 messages with every question.
+- **Chat history.** Conversations are saved in the browser and can be reopened from the sidebar.
+- **Responsive UI.** A custom HTML/CSS/JS interface that works on desktop, tablet and mobile, with a collapsible sidebar and a docked input bar on small screens.
 
-## What It Does
-
-- **Explain a full document** — upload a PDF, get a tutor-style spoken explanation
-- **Ask a specific question about a document** — upload a PDF, ask something targeted, get a grounded answer using semantic search (RAG)
-- **Ask a direct question** — no document needed, general Q&A
-- **Conversation memory** — follow-up questions ("explain that more simply") work naturally, using persisted chat history
-- **Adaptive responses** — short answers for quick meanings, detailed explanations when asked, step-by-step working for maths, formatted code blocks for programming questions, clean output for content-generation requests (essays, paragraphs)
-- All modes work in **English, Hindi, or Gujarati**, with **6 voice options** (male/female per language)
-- Handles natural Hinglish/Gujlish input (Romanized native language, e.g., "kem cho," "kaise ho")
-- Markdown rendering — tables, bold text, and bullet points display properly formatted, not as raw symbols
-
-## How It Works
+## How it works
 
 ```
-User (chat interface)
-    |
-Flask backend routes based on input:
-  - PDF + "explain everything"  -> full document explanation
-  - PDF + specific question     -> RAG-based Q&A grounded in that document
-  - No PDF, just a question     -> general tutor Q&A
-    |
-Text extraction (pdfplumber, for PDFs)
-    |
-For document Q&A: text is chunked, embedded (sentence-transformers),
-stored in Supabase (pgvector) -> question embedded -> semantic similarity
-search retrieves the most relevant chunks
-    |
-Recent conversation history (from Supabase) + relevant chunks + adaptive
-style instructions -> assembled into a prompt
-    |
-LLM (Groq API - openai/gpt-oss-120b) generates the response
-    |
-Text-to-Speech (edge-tts) converts the response into spoken audio
-    |
-Response (text + audio) returned to the chat interface,
-Markdown rendered via marked.js
+Browser (chat UI, history in localStorage)
+   |  question + last 8 messages + language/voice
+   v
+Flask (app.py)
+   |-- PDF upload: pdfplumber -> text -> sentence-aware chunks -> embeddings -> Supabase (pgvector)
+   |-- Question: embed question -> pgvector search (current document only) -> top 3 chunks
+   |-- Prompt: format rules + language rules + chunks + chat history -> Groq LLM
+   |-- Answer text -> edge-tts -> MP3 -> Supabase Storage
+   v
+Browser renders Markdown (tables, steps, code with Copy) and plays the audio
 ```
 
-### PDF Text Extraction
-Uses `pdfplumber` to extract the text layer from text-based PDFs, page by page. Scanned/image-based PDFs aren't currently supported (would need OCR — see Future Work).
+### Retrieval (RAG)
+- Text is split into chunks of about 1000 characters at sentence boundaries, with a 150-character overlap.
+- Each chunk is embedded with `all-MiniLM-L6-v2` (384 dimensions) using `fastembed`, which runs on ONNX and does not need PyTorch.
+- Chunks are stored in a Supabase Postgres table with `pgvector`. A SQL function, `match_chunks`, returns the closest chunks by cosine distance, filtered to the attached document.
+- Short follow-up questions are searched together with the previous question, so "explain that" still finds the right passage.
+- If vector search returns nothing, a keyword fallback searches the extracted text.
 
-### Retrieval-Augmented Generation (RAG)
-Documents are split into chunks (~3000 characters), and each chunk is converted into a 384-dimensional embedding using `sentence-transformers` (`all-MiniLM-L6-v2`), stored in Supabase using the `pgvector` extension. When a user asks a question about a document, the question is embedded using the same model, and a SQL function (`match_chunks`) performs cosine-similarity search to find the most semantically relevant chunks — scoped to the currently attached document. This replaced an earlier, simpler keyword-overlap matching approach, and correctly finds relevant content even when the question is phrased differently than the source text.
+### Prompting
+One shared instruction block (`prompts.py`) sets the answer format. Further instructions control natural Hindi/Gujarati wording (common English terms stay in English), clean output for essays and letters, and how to treat follow-up questions.
 
-### Conversation Memory
-Every exchange is saved to Supabase's `conversations` table. Before generating a new response, recent history is fetched and injected into the prompt, with an instruction telling the model to use it for resolving follow-up questions like "explain that more simply."
+## Tech stack
 
-### Adaptive Response Styling
-A layered prompt instruction set detects what kind of response is needed — a quick definition, a detailed explanation, a maths problem requiring step-by-step working, a coding question requiring a formatted code block, or a content-generation request (essay/paragraph) that should skip conversational framing entirely.
-
-### Multilingual Generation (Not Translation)
-The LLM generates responses directly in the target language rather than translating from an English draft, with natural code-mixing — keeping commonly-English terms (e.g., "computer," "SQL," "photosynthesis") in English even within Hindi/Gujarati sentences, matching how people actually speak.
-
-### Text-to-Speech
-`edge-tts` converts the LLM's text response into spoken audio, with 6 selectable voices (English/Hindi/Gujarati x Male/Female).
-
-## Tech Stack
-
-| Component | Tool |
+| Part | Tool |
 |---|---|
-| LLM | Groq API (`openai/gpt-oss-120b`) |
-| Embeddings | sentence-transformers (`all-MiniLM-L6-v2`) |
-| Vector database | Supabase (PostgreSQL + pgvector) |
-| Conversation storage | Supabase (PostgreSQL) |
-| PDF text extraction | pdfplumber |
-| Text-to-speech | edge-tts |
-| Backend | Flask (Python) |
-| Frontend | HTML / CSS / vanilla JavaScript, marked.js for Markdown rendering |
-| Cost | Free — entirely free-tier tools |
+| LLM | Groq API, `openai/gpt-oss-120b` |
+| Embeddings | fastembed, `all-MiniLM-L6-v2` |
+| Vector store and audio storage | Supabase (Postgres + pgvector, Storage) |
+| PDF text | pdfplumber |
+| Voice | edge-tts |
+| Backend | Flask, gunicorn |
+| Frontend | HTML, CSS, JavaScript, marked.js |
 
-## Key Engineering Decisions & Real Debugging
+## Run it locally
 
-- **Model migration** — originally built on `llama-3.3-70b-versatile`, migrated to `openai/gpt-oss-120b` after Groq announced deprecation mid-project (Aug 16, 2026 shutdown)
-- **Chunking for rate-limit handling** — hit a real 413 "request too large" error on large PDFs; solved with paragraph-boundary-aware chunking
-- **Fixed an audio caching bug** — the browser served stale audio because every response was saved to the same filename; fixed with unique UUID-based filenames
-- **Fixed truncated responses** — increased token limits and added explicit completion instructions
-- **Diagnosed a Supabase RLS permissions issue** — new tables default to locked-down Row Level Security, blocking even backend writes until explicitly configured
-- **Fixed a table-naming mismatch** — a typo (`document_chunk` vs `document_chunks`) silently broke RAG retrieval; Postgres error messages didn't make this obvious, requiring careful verification queries
-- **Fixed a function-naming collision** — a locally-defined legacy function shadowed an imported one with the same name, causing the RAG upgrade to silently fail while error messages pointed elsewhere
-- **Fixed cross-document retrieval bleed-through** — semantic search initially searched across ALL previously uploaded documents' chunks rather than scoping to the currently attached document; fixed by adding a document-name filter to the similarity search function
-- **Optimized slow document processing** — batched embedding generation and database inserts instead of processing one chunk at a time
-- **Deployment memory constraint** — attempted deployment on Render's free tier (512MB RAM) surfaced an out-of-memory error, since `sentence-transformers` pulls in PyTorch, which alone can exceed the available memory. This is a genuine, documented limitation of running local ML inference on free-tier hosting, and is noted as active future work (see below)
+1. Clone the repo and create a virtual environment, then install the packages:
+   ```bash
+   python -m venv venv
+   venv\Scripts\activate          # Windows
+   python -m pip install -r requirements.txt
+   ```
+2. Create a `.env` file in the project folder:
+   ```
+   GROQ_API_KEY=your_groq_key
+   SUPABASE_URL=https://your-project.supabase.co
+   SUPABASE_KEY=your_supabase_secret_key
+   ```
+3. In the Supabase SQL Editor, run:
+   ```sql
+   create extension if not exists vector;
 
-## Advantages
+   create table document_chunks (
+     id bigserial primary key,
+     document_name text not null,
+     chunk_text text not null,
+     embedding vector(384),
+     created_at timestamptz default now()
+   );
+   alter table document_chunks disable row level security;
+   grant select, insert, update, delete on public.document_chunks to service_role;
+   grant usage, select on all sequences in schema public to service_role;
 
-- Genuine RAG implementation with semantic search, not just keyword matching or full-document stuffing
-- Multilingual generation, not translation — natural code-mixed output
-- Three distinct interaction modes plus persistent conversation memory
-- Zero cost in development — entirely free-tier APIs and libraries
-- Tested systematically across subjects, languages, and edge cases (vague questions, trick questions, off-topic questions, emotionally-framed questions)
+   create or replace function match_chunks (
+     query_embedding vector(384),
+     match_count int default 3,
+     filter_document_name text default null
+   )
+   returns table (id bigint, document_name text, chunk_text text, similarity float)
+   language sql stable as $$
+     select id, document_name, chunk_text, 1 - (embedding <=> query_embedding) as similarity
+     from document_chunks
+     where filter_document_name is null or document_name = filter_document_name
+     order by embedding <=> query_embedding
+     limit match_count;
+   $$;
+   ```
+4. In Supabase Storage, create a **public** bucket named `audio`.
+5. Start the app and open `http://127.0.0.1:5000`:
+   ```bash
+   python app.py
+   ```
+
+## Deployment notes
+
+- The `Procfile` runs `gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 1 --threads 2`. The longer timeout is needed because a PDF question can include an LLM call, voice generation and an upload.
+- Set `GROQ_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY` and `SECRET_KEY` as environment variables on the host.
+- The first attempt on a 512 MB free tier failed because `sentence-transformers` pulls in PyTorch. Moving to `fastembed` removed that dependency.
+- Free Supabase projects pause after a period of inactivity. If the app shows connection errors, restore the project from the Supabase dashboard.
 
 ## Limitations
 
-- Only supports text-based PDFs — scanned/handwritten documents aren't currently handled
-- No user authentication — single shared session, not scoped per user
-- Single-document context per conversation — multi-document support is planned but not yet implemented
-- **Production deployment blocked by a memory constraint**: the embedding model (via PyTorch) exceeds free-tier hosting memory limits (512MB on Render). The application runs correctly in local development; a production deployment would require either a lighter-weight embedding approach (e.g., a hosted embedding API instead of local inference) or a higher-memory hosting tier
-- Not yet mobile-responsive
+- Only text-based PDFs work. Scanned PDFs need OCR, which is not built.
+- One PDF per chat, and no user accounts. Chunks are stored per file name, so two people uploading files with the same name would overwrite each other's chunks.
+- Chat memory sends the last 8 messages, so very old parts of a long chat are forgotten.
+- Chat history lives in the browser, so it is not shared across devices.
+- "Explain this document" makes one LLM call per large chunk, so it is slow on long PDFs.
 
-## Future Work
+## What I would build next
 
-- Resolve the deployment memory constraint — likely by switching to a hosted embedding API instead of local `sentence-transformers`/PyTorch inference, to keep the deployed app lightweight
-- Multiple PDF upload support, with search scoped across all attached documents
-- Mobile responsiveness
-- User authentication (Supabase Auth), scoping conversation history and documents per user
-- OCR support for photographed/scanned notes (image preprocessing with OpenCV — deskew, denoise, contrast enhancement — was built and tested; full OCR integration is a planned next step)
-- CI/CD pipeline for automated testing and deployment on future updates
+- Multiple PDFs per chat and per-user accounts with Supabase Auth.
+- An embedding cache and an answer cache for repeated questions.
+- OCR for scanned notes.
+- Quiz and flashcard modes that cover the whole document.
+- A rolling summary for long chats instead of a fixed 8-message window.
 
-## Setup (Local Development)
-
-```bash
-pip install -r requirements.txt
-
-# Set environment variables
-export GROQ_API_KEY="your_key_here"        # Mac/Linux
-export SUPABASE_URL="your_supabase_url"
-export SUPABASE_KEY="your_supabase_key"
-
-python app.py
-```
-
-On Windows PowerShell, set variables like this instead:
-```powershell
-$env:GROQ_API_KEY="your_key_here"
-$env:SUPABASE_URL="your_supabase_url"
-$env:SUPABASE_KEY="your_supabase_key"
-```
-
-Open `http://127.0.0.1:5000` in your browser.
-
-## Project Structure
+## Project structure
 
 ```
-notegoo/
-├── app.py                  # Flask backend, routes
-├── extract_pdf.py          # PDF text extraction
-├── explain_text.py         # Full-document explanation + chunking
-├── answer_question.py      # Targeted & direct Q&A, RAG integration, memory
-├── vector_search.py        # Embedding generation + semantic search (RAG)
-├── db.py                   # Supabase connection, conversation history
-├── text_to_speech.py       # Voice generation (6 voices)
-├── preprocess_image.py     # Image preprocessing (built, OCR integration pending)
-├── templates/
-│   └── index.html          # Chat-style frontend
-├── uploads/                 # Temporary PDF storage
-└── static/audio/            # Generated audio files
+app.py               Flask routes: upload, process, clear_file
+answer_question.py   Prompt building, retrieval, memory, LLM call
+explain_text.py      Whole-document explanation with chunking
+extract_pdf.py       PDF text extraction
+vector_search.py     Chunking, embeddings, pgvector search
+text_to_speech.py    edge-tts voice generation
+db.py                Supabase client and audio upload
+prompts.py           Shared answer-format instruction
+templates/index.html The chat interface
+Procfile, requirements.txt, .gitignore
 ```
