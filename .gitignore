@@ -1,8 +1,10 @@
+@"
 venv/
 __pycache__/
 *.pyc
 .env
 uploads/*
-!uploads/.gitkeep
-static/audio/*.mp3
-.DS_Store
+static/audio/*
+*.mp3
+test_*.py
+"@ | Out-File -Encoding ascii .gitignore
